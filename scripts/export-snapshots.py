@@ -1,89 +1,58 @@
-import re
-import boto3
 import csv
-from botocore.exceptions import ClientError
+import boto3
 
-ec2 = boto3.client('ec2')
+def write_to_csv(snapshot_list):
+    with open('snapshots.csv', 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(['ID', 'Description', 'Creation date', 'Size', 'Volume ID', 'Instance ID', 'Instance Name', 'Exists'])
+        for snapshot in snapshot_list:
+            writer.writerow([snapshot['SnapshotId'], snapshot['Description'], snapshot['StartTime'], 
+                             snapshot['VolumeSize'], snapshot['VolumeId'], snapshot.get('InstanceId', ''), 
+                             snapshot.get('InstanceName', ''), snapshot.get('Exists', '')])
 
-def get_snapshots():
-    return ec2.describe_snapshots(OwnerIds=['self'])['Snapshots']
 
-def get_volumes():
-    return dict([
-        (v['VolumeId'], v)
-        for v in ec2.describe_volumes()['Volumes']
-    ])
+def get_all_snapshots():
+    session = boto3.Session()
+    ec2 = session.resource('ec2')
+    
+    snapshot_list = []
+    for snapshot in ec2.snapshots.filter(OwnerIds=['self']):
+        instance_id = ''
+        instance_name = ''
+        exists = ''
 
-def get_instances():
-    reservations = ec2.describe_instances()['Reservations']
-    instances = [
-        instance
-        for reservation in reservations
-        for instance in reservation['Instances']
-    ]
-    return dict([
-        (i['InstanceId'], i)
-        for i in instances
-    ])
+        try:
+            volume = ec2.Volume(snapshot.volume_id)
+            # Volume exists if its state is not 'deleted', regardless of being attached or not.
+            exists = True if volume.state != 'deleted' else False
 
-def get_images():
-    images = ec2.describe_images(Owners=['self'])['Images']
-    return dict([
-        (i['ImageId'], i)
-        for i in images
-    ])
-
-def parse_description(description):
-    regex = r"^Created by CreateImage\((.*?)\) for (.*?) "
-    matches = re.finditer(regex, description, re.MULTILINE)
-    for matchNum, match in enumerate(matches):
-        return match.groups()
-    return '', ''
+            attachments = volume.attachments
+            if attachments:
+                instance_id = attachments[0]['InstanceId']
+                instance = ec2.Instance(instance_id)
+                instance_name = [tag['Value'] for tag in instance.tags if tag['Key']=='Name'][0]
+            
+        except Exception as e:
+            print('Exception: ', e)
+            exists = False
+        
+        snapshot_list.append({'SnapshotId': snapshot.snapshot_id, 
+                              'Description': snapshot.description, 
+                              'StartTime': snapshot.start_time, 
+                              'VolumeSize': snapshot.volume_size,
+                              'VolumeExists': exists,
+                              'VolumeId': snapshot.volume_id,
+                              'InstanceId': instance_id,
+                              'InstanceName': instance_name,})
+      
+    return snapshot_list
 
 
 def main():
+    
+    snapshot_list = get_all_snapshots() # default region will be used
+    write_to_csv(snapshot_list)
 
-    volumes = get_volumes()
-    instances = get_instances()
-    images = get_images()
 
-
-    def volume_exists(volume_id):
-        return volume_id in volumes if volume_id else ''
-
-    def instance_exists(instance_id):
-        return instance_id in instances if instance_id else ''
-
-    def image_exists(image_id):
-        return image_id in images if image_id else ''
-
-    with open('report.csv', 'w') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow([
-            'snapshot id',
-            'description',
-            'started',
-            'size',
-            'volume',
-            'volume exists',
-            'instance',
-            'instance exists',
-            'ami',
-            'ami exists'])
-        for snap in get_snapshots():
-            instance_id, image_id = parse_description(snap['Description'])
-            writer.writerow([
-                snap['SnapshotId'],
-                snap['Description'],
-                snap['StartTime'],
-                str(snap['VolumeSize']),
-                snap['VolumeId'],
-                str(volume_exists(snap['VolumeId'])),
-                instance_id,
-                str(instance_exists(instance_id)),
-                image_id,
-                str(image_exists(image_id)),
-            ])
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
