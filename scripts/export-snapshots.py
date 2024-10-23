@@ -10,7 +10,6 @@ def write_to_csv(snapshot_list):
                              snapshot['VolumeSize'], snapshot['VolumeId'], snapshot.get('InstanceId', ''), 
                              snapshot.get('InstanceName', ''), snapshot.get('Exists', '')])
 
-
 def get_all_snapshots():
     session = boto3.Session()
     ec2 = session.resource('ec2')
@@ -23,7 +22,6 @@ def get_all_snapshots():
 
         try:
             volume = ec2.Volume(snapshot.volume_id)
-            # Volume exists if its state is not 'deleted', regardless of being attached or not.
             exists = True if volume.state != 'deleted' else False
 
             attachments = volume.attachments
@@ -47,12 +45,10 @@ def get_all_snapshots():
       
     return snapshot_list
 
-
 def main():
     
-    snapshot_list = get_all_snapshots() # default region will be used
+    snapshot_list = get_all_snapshots() # default region
     write_to_csv(snapshot_list)
-
 
 if __name__ == "__main__":
     main()
